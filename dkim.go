@@ -197,23 +197,24 @@ func (dkim *dkim) GetDkimHeader(email []byte, signer Signer, options *SigOptions
 		return "", err
 	}
 
-	subh := ""
-	l := len(subh)
+	// add to DKIM-Header
+	subHeader := ""
+	l := len(subHeader)
 	for _, c := range sig {
-		subh += string(c)
+		subHeader += string(c)
 		l++
 		if l >= MaxHeaderLineLength {
-			dHeader += subh + FWS
-			subh = ""
+			dHeader += subHeader + FWS
+			subHeader = ""
 			l = 0
 		}
 	}
-	dHeader += subh
+	dHeader += subHeader
 
 	return dHeader[len("DKIM-Signature: "):], nil
 }
 
-func getHashString(email []byte, options *SigOptions) (headers []byte, dheader string, err error) {
+func getHashString(email []byte, options *SigOptions) (headers []byte, dHeader string, err error) {
 	headers, body, err := canonicalize(email, options.Canonicalization, options.Headers)
 	if err != nil {
 		return []byte{}, "", err
@@ -227,7 +228,7 @@ func getHashString(email []byte, options *SigOptions) (headers []byte, dheader s
 	}
 
 	dkimHeader := newDkimHeaderBySigOptions(*options)
-	dHeader := dkimHeader.getHeaderBaseForSigning(bodyHash)
+	dHeader = dkimHeader.getHeaderBaseForSigning(bodyHash)
 
 	canonicalizations := strings.Split(options.Canonicalization, "/")
 	dHeaderCanonicalized, err := canonicalizeHeader(dHeader, canonicalizations[0])
@@ -382,8 +383,10 @@ func canonicalize(email []byte, cano string, h []string) (headers, body []byte, 
 			body = append(body, []byte{13, 10}...)
 		}
 		body = bytes.TrimRight(body, "\r\n")
-		body = append(body, []byte{13, 10}...)
 
+		if len(body) > 0 {
+			body = append(body, []byte{13, 10}...)
+		}
 	}
 	return
 }
@@ -443,12 +446,15 @@ func getBodyHash(body []byte, algo string, bodyLength uint) (string, error) {
 	} else {
 		h = sha256.New()
 	}
+
 	toH := body
+
 	// if l tag (body length)
 	if bodyLength != 0 {
 		if uint(len(toH)) < bodyLength {
-			bodyLength = uint(len(toH))
+			return "", ErrBadDKimTagLBodyTooShort
 		}
+
 		toH = toH[0:bodyLength]
 	}
 
@@ -559,14 +565,21 @@ func getHeadersList(rawHeader *[]byte) (*list.List, error) {
 
 // getHeadersBody return headers and body
 func getHeadersBody(email []byte) ([]byte, []byte, error) {
-	// TODO: \n -> \r\n
-	parts := bytes.SplitN(email, []byte{13, 10, 13, 10}, 2)
+	// \n -> \r\n
+	substitutedEmail := bytes.Replace(email, []byte{10}, []byte{13, 10}, -1)
+
+	parts := bytes.SplitN(substitutedEmail, []byte{13, 10, 13, 10}, 2)
 	if len(parts) != 2 {
 		return []byte{}, []byte{}, ErrBadMailFormat
 	}
-	// Empty body
-	if len(parts[1]) == 0 {
-		parts[1] = []byte{13, 10}
+
+	headers := parts[0]
+	body    := parts[1]
+
+	// Empty body -- (add CRLF?)
+	if len(body) == 0 {
+		body = []byte{13, 10}
 	}
-	return parts[0], parts[1], nil
+
+	return headers, body, nil
 }
