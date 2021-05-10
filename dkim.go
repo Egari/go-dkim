@@ -310,14 +310,14 @@ func getSignableHeaders(presentHeader []byte, headersToSign []string) (signableH
 // state: SUCCESS or PERMFAIL or TEMPFAIL, TESTINGSUCCESS, TESTINGPERMFAIL
 // TESTINGTEMPFAIL or NOTSIGNED
 // error: if an error occurs during verification
-func (dkim *dkim) Verify(email []byte, opts ...DNSOpt) (VerifyOutput, error) {
+func (dkim *dkim) Verify(email []byte, opts ...DNSOpt) (VerifyOutput, *DKIMHeader, error) {
 	// parse email
 	dkimHeader, err := newDkimHeaderFromEmail(email)
 	if err != nil {
 		if err == ErrDkimHeaderNotFound {
-			return NOTSIGNED, ErrDkimHeaderNotFound
+			return NOTSIGNED, nil, ErrDkimHeaderNotFound
 		}
-		return PERMFAIL, err
+		return PERMFAIL, nil, err
 	}
 
 	// we do not set query method because if it's others, validation failed earlier
@@ -325,13 +325,14 @@ func (dkim *dkim) Verify(email []byte, opts ...DNSOpt) (VerifyOutput, error) {
 	if err != nil {
 		// fix https://github.com/toorop/go-dkim/issues/1
 		//return getVerifyOutput(verifyOutputOnError, err, pubKey.FlagTesting)
-		return verifyOutputOnError, err
+		return verifyOutputOnError, nil, err
 	}
 
 	// Normalize
 	headers, body, err := canonicalize(email, dkimHeader.MessageCanonicalization, dkimHeader.Headers)
 	if err != nil {
-		return getVerifyOutput(PERMFAIL, err, pubKey.FlagTesting)
+		verifyOutput, err := getVerifyOutput(PERMFAIL, err, pubKey.FlagTesting)
+		return verifyOutput, nil, err
 	}
 	sigHash := strings.Split(dkimHeader.Algorithm, "-")
 	// check if hash algo are compatible
@@ -343,12 +344,14 @@ func (dkim *dkim) Verify(email []byte, opts ...DNSOpt) (VerifyOutput, error) {
 		}
 	}
 	if !compatible {
-		return getVerifyOutput(PERMFAIL, ErrVerifyInappropriateHashAlgo, pubKey.FlagTesting)
+		verifyOutput, err := getVerifyOutput(PERMFAIL, ErrVerifyInappropriateHashAlgo, pubKey.FlagTesting)
+		return verifyOutput, nil, err
 	}
 
 	// expired ?
 	if !dkimHeader.SignatureExpiration.IsZero() && dkimHeader.SignatureExpiration.Second() < time.Now().Second() {
-		return getVerifyOutput(PERMFAIL, ErrVerifySignatureHasExpired, pubKey.FlagTesting)
+		verifyOutput, err := getVerifyOutput(PERMFAIL, ErrVerifySignatureHasExpired, pubKey.FlagTesting)
+		return verifyOutput, nil, err
 
 	}
 
@@ -356,26 +359,31 @@ func (dkim *dkim) Verify(email []byte, opts ...DNSOpt) (VerifyOutput, error) {
 	// get body hash
 	bodyHash, err := getBodyHash(body, sigHash[1], dkimHeader.BodyLength)
 	if err != nil {
-		return getVerifyOutput(PERMFAIL, err, pubKey.FlagTesting)
+		verifyOutput, err := getVerifyOutput(PERMFAIL, err, pubKey.FlagTesting)
+		return verifyOutput, nil, err
 	}
 	//println(bodyHash)
 	if bodyHash != dkimHeader.BodyHash {
-		return getVerifyOutput(PERMFAIL, ErrVerifyBodyHash, pubKey.FlagTesting)
+		verifyOutput, err := getVerifyOutput(PERMFAIL, ErrVerifyBodyHash, pubKey.FlagTesting)
+		return verifyOutput, nil, err
 	}
 
 	// compute sig
 	dkimHeaderCano, err := canonicalizeHeader(dkimHeader.rawForSign, strings.Split(dkimHeader.MessageCanonicalization, "/")[0])
 	if err != nil {
-		return getVerifyOutput(TEMPFAIL, err, pubKey.FlagTesting)
+		verifyOutput, err := getVerifyOutput(TEMPFAIL, err, pubKey.FlagTesting)
+		return verifyOutput, nil, err
 	}
 	toSignStr := string(headers) + dkimHeaderCano
 	toSign := bytes.TrimRight([]byte(toSignStr), " \r\n")
 
 	err = verifySignature(toSign, dkimHeader.SignatureData, &pubKey.PubKey, sigHash[1])
 	if err != nil {
-		return getVerifyOutput(PERMFAIL, err, pubKey.FlagTesting)
+		verifyOutput, err := getVerifyOutput(PERMFAIL, err, pubKey.FlagTesting)
+		return verifyOutput, nil, err
 	}
-	return SUCCESS, nil
+
+	return SUCCESS, dkimHeader, nil
 }
 
 // getVerifyOutput returns output of verify fct according to the testing flag
