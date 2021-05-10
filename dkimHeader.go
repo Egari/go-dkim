@@ -10,7 +10,6 @@ import (
 	"time"
 )
 
-// DKIMHeader
 type DKIMHeader struct {
 	// Version  This tag defines the version of DKIM
 	// specification that applies to the signature record.
@@ -194,7 +193,7 @@ type DKIMHeader struct {
 
 	// RawForsign represents the raw part (without canonicalization) of the header
 	// used for computint sig in verify process
-	RawForSign string
+	rawForSign string
 }
 
 // NewDkimHeaderBySigOptions return a new DkimHeader initioalized with sigOptions value
@@ -219,7 +218,7 @@ func newDkimHeaderBySigOptions(options SigOptions) *DKIMHeader {
 	return h
 }
 
-// NewFromEmail return a new DkimHeader by parsing an email
+// newDkimHeaderFromEmail return a new DKIMHeader by parsing an email
 // Note: according to RFC 6376 an email can have multiple DKIM Header
 // in this case we return the last inserted or the last with d== mail from
 func newDkimHeaderFromEmail(email []byte) (*DKIMHeader, error) {
@@ -255,7 +254,7 @@ func newDkimHeaderFromEmail(email []byte) (*DKIMHeader, error) {
 	if err != nil {
 		return nil, ErrBadMailFormat
 	}
-	rawHeadersList, err := getHeadersList(&rawHeaders)
+	rawHeadersList, err := getHeadersList(rawHeaders)
 	if err != nil {
 		return nil, err
 	}
@@ -301,7 +300,12 @@ func parseDkHeader(header string) (dkh *DKIMHeader, err error) {
 	if t == -1 {
 		return nil, ErrDkimHeaderBTagNotFound
 	}
-	dkh.RawForSign = header[0 : t+2]
+	dkh.rawForSign = header[0 : t+2]
+	p := strings.IndexByte(header[t:], ';')
+	if p != -1 {
+		dkh.rawForSign = dkh.rawForSign + header[t+p:]
+	}
+
 	// Mandatory
 	mandatoryFlags := make(map[string]bool, 7) //(b'v', b'a', b'b', b'bh', b'd', b'h', b's')
 	mandatoryFlags["v"] = false
@@ -322,7 +326,11 @@ func parseDkHeader(header string) (dkh *DKIMHeader, err error) {
 
 	fs := strings.Split(val, ";")
 	for _, f := range fs {
+		if f == "" {
+			continue
+		}
 		flagData := strings.SplitN(f, "=", 2)
+
 		// https://github.com/toorop/go-dkim/issues/2
 		// if flag is not in the form key=value (eg doesn't have "=")
 		if len(flagData) != 2 {
@@ -428,7 +436,7 @@ func parseDkHeader(header string) (dkh *DKIMHeader, err error) {
 		}
 	}
 
-	// default for i/Auid
+	// default for i/AUID
 	if dkh.AUID == "" {
 		dkh.AUID = "@" + dkh.Domain
 	}
@@ -453,7 +461,7 @@ func (d *DKIMHeader) getHeaderBaseForSigning(bodyHash string) string {
 	}
 	subh += " d=" + d.Domain + ";"
 
-	// Auid
+	// AUID
 	if len(d.AUID) != 0 {
 		if len(subh)+len(d.AUID)+4 > MaxHeaderLineLength {
 			h += subh + FWS

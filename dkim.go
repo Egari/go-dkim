@@ -12,7 +12,6 @@ import (
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/pem"
-	"errors"
 	"hash"
 	"net"
 	"regexp"
@@ -39,9 +38,20 @@ func NewDkim() *dkim {
 	}
 }
 
+type VerifyOutput int
+
+const (
+	SUCCESS VerifyOutput = 1 + iota
+	PERMFAIL
+	TEMPFAIL
+	NOTSIGNED
+	TESTINGSUCCESS
+	TESTINGPERMFAIL
+	TESTINGTEMPFAIL
+)
+
 // sigOptions represents signing options
 type SigOptions struct {
-
 	// DKIM version (default 1)
 	Version uint
 
@@ -95,7 +105,7 @@ type DefaultSigner struct {
 
 func (s *DefaultSigner) Sign(message []byte, algo string) (string, error) {
 	if s.PrivateKey == nil {
-		return "", errors.New("PrivateKey must be set before signing")
+		return "", ErrSignPrivateKeyRequired
 	}
 
 	return getSignature(message, s.PrivateKey, algo)
@@ -116,18 +126,33 @@ func (dkim *dkim) NewSigOptions() SigOptions {
 }
 
 func getPrivateKeyFromSigOptions(options SigOptions) (*rsa.PrivateKey, error) {
+	var privateKey *rsa.PrivateKey
+
+	// PrivateKey
 	if len(options.PrivateKey) == 0 {
 		return nil, ErrSignPrivateKeyRequired
 	}
 	d, _ := pem.Decode(options.PrivateKey)
 	if d == nil {
-		return nil, ErrCandNotParsePrivateKey
+		return nil, ErrCanNotParsePrivateKey
 	}
-	key, err := x509.ParsePKCS1PrivateKey(d.Bytes)
-	if err != nil {
-		return nil, ErrCandNotParsePrivateKey
+
+	// try to parse it as PKCS1 otherwise try PKCS8
+	if key, err := x509.ParsePKCS1PrivateKey(d.Bytes); err != nil {
+		if key, err := x509.ParsePKCS8PrivateKey(d.Bytes); err != nil {
+			return nil, ErrCanNotParsePrivateKey
+		} else {
+			privateKey = key.(*rsa.PrivateKey)
+		}
+	} else {
+		privateKey = key
 	}
-	return key, nil
+
+	if privateKey == nil {
+		return nil, ErrCanNotParsePrivateKey
+	}
+
+	return privateKey, nil
 }
 
 // Sign signs an email
@@ -214,6 +239,7 @@ func (dkim *dkim) GetDkimHeader(email []byte, signer Signer, options *SigOptions
 }
 
 func getHashString(email []byte, options *SigOptions) (headers []byte, dheader string, err error) {
+	// Normalize
 	headers, body, err := canonicalize(email, options.Canonicalization, options.Headers)
 	if err != nil {
 		return []byte{}, "", err
@@ -221,6 +247,7 @@ func getHashString(email []byte, options *SigOptions) (headers []byte, dheader s
 
 	signHash := strings.Split(options.Algo, "-")
 
+	// hash body
 	bodyHash, err := getBodyHash(body, signHash[1], options.BodyLength)
 	if err != nil {
 		return []byte{}, "", err
@@ -231,6 +258,7 @@ func getHashString(email []byte, options *SigOptions) (headers []byte, dheader s
 		options.Headers = headersToSign
 	}
 
+	// Get dkim header base
 	dkimHeader := newDkimHeaderBySigOptions(*options)
 	dHeader := dkimHeader.getHeaderBaseForSigning(bodyHash)
 
@@ -282,28 +310,31 @@ func getSignableHeaders(presentHeader []byte, headersToSign []string) (signableH
 // state: SUCCESS or PERMFAIL or TEMPFAIL, TESTINGSUCCESS, TESTINGPERMFAIL
 // TESTINGTEMPFAIL or NOTSIGNED
 // error: if an error occurs during verification
-func (dkim *dkim) Verify(email []byte) (dkimHeader *DKIMHeader, err error) {
-	dkimHeader, err = newDkimHeaderFromEmail(email)
+func (dkim *dkim) Verify(email []byte, opts ...DNSOpt) (VerifyOutput, error) {
+	// parse email
+	dkimHeader, err := newDkimHeaderFromEmail(email)
 	if err != nil {
-		return
+		if err == ErrDkimHeaderNotFound {
+			return NOTSIGNED, ErrDkimHeaderNotFound
+		}
+		return PERMFAIL, err
 	}
-	pubKeys, err := dkim.PubKeyFromDns(dkimHeader.Selector, dkimHeader.Domain)
-	if err != nil {
-		return nil, err
-	}
-	if len(pubKeys) == 0 {
-		return nil, errors.New("Now pub keys found")
-	}
-	pubKey := pubKeys[0]
 
+	// we do not set query method because if it's others, validation failed earlier
+	pubKey, verifyOutputOnError, err := dkim.NewPubKeyRespFromDNS(dkimHeader.Selector, dkimHeader.Domain, opts...)
+	if err != nil {
+		// fix https://github.com/toorop/go-dkim/issues/1
+		//return getVerifyOutput(verifyOutputOnError, err, pubKey.FlagTesting)
+		return verifyOutputOnError, err
+	}
+
+	// Normalize
 	headers, body, err := canonicalize(email, dkimHeader.MessageCanonicalization, dkimHeader.Headers)
 	if err != nil {
-		return nil, err
+		return getVerifyOutput(PERMFAIL, err, pubKey.FlagTesting)
 	}
 	sigHash := strings.Split(dkimHeader.Algorithm, "-")
-	if len(sigHash) < 2 {
-		return nil, ErrVerifyInappropriateHashAlgo
-	}
+	// check if hash algo are compatible
 	compatible := false
 	for _, algo := range pubKey.HashAlgo {
 		if sigHash[1] == algo {
@@ -312,53 +343,71 @@ func (dkim *dkim) Verify(email []byte) (dkimHeader *DKIMHeader, err error) {
 		}
 	}
 	if !compatible {
-		return nil, ErrVerifyInappropriateHashAlgo
+		return getVerifyOutput(PERMFAIL, ErrVerifyInappropriateHashAlgo, pubKey.FlagTesting)
 	}
 
-	if !dkimHeader.SignatureExpiration.IsZero() {
-		if dkimHeader.SignatureExpiration.Before(dkim.now()) {
-			return nil, ErrVerifySignatureHasExpired
-		}
+	// expired ?
+	if !dkimHeader.SignatureExpiration.IsZero() && dkimHeader.SignatureExpiration.Second() < time.Now().Second() {
+		return getVerifyOutput(PERMFAIL, ErrVerifySignatureHasExpired, pubKey.FlagTesting)
+
 	}
 
+	//println("|" + string(body) + "|")
+	// get body hash
 	bodyHash, err := getBodyHash(body, sigHash[1], dkimHeader.BodyLength)
 	if err != nil {
-		return nil, err
+		return getVerifyOutput(PERMFAIL, err, pubKey.FlagTesting)
 	}
-
+	//println(bodyHash)
 	if bodyHash != dkimHeader.BodyHash {
-		return nil, ErrVerifyBodyHash
+		return getVerifyOutput(PERMFAIL, ErrVerifyBodyHash, pubKey.FlagTesting)
 	}
 
 	// compute sig
-	dkimHeaderCano, err := canonicalizeHeader(dkimHeader.RawForSign, strings.Split(dkimHeader.MessageCanonicalization, "/")[0])
+	dkimHeaderCano, err := canonicalizeHeader(dkimHeader.rawForSign, strings.Split(dkimHeader.MessageCanonicalization, "/")[0])
 	if err != nil {
-		return nil, err
+		return getVerifyOutput(TEMPFAIL, err, pubKey.FlagTesting)
 	}
 	toSignStr := string(headers) + dkimHeaderCano
 	toSign := bytes.TrimRight([]byte(toSignStr), " \r\n")
 
 	err = verifySignature(toSign, dkimHeader.SignatureData, &pubKey.PubKey, sigHash[1])
 	if err != nil {
-		return nil, err
+		return getVerifyOutput(PERMFAIL, err, pubKey.FlagTesting)
 	}
-	if pubKey.FlagTesting {
-		err = ErrTesting
+	return SUCCESS, nil
+}
+
+// getVerifyOutput returns output of verify fct according to the testing flag
+func getVerifyOutput(status VerifyOutput, err error, flagTesting bool) (VerifyOutput, error) {
+	if !flagTesting {
+		return status, err
 	}
-	return
+	switch status {
+	case SUCCESS:
+		return TESTINGSUCCESS, err
+	case PERMFAIL:
+		return TESTINGPERMFAIL, err
+	case TEMPFAIL:
+		return TESTINGTEMPFAIL, err
+	}
+	// should never happen but compilator sream whithout return
+	return status, err
 }
 
 // canonicalize returns canonicalized version of header and body
 func canonicalize(email []byte, cano string, h []string) (headers, body []byte, err error) {
 	body = []byte{}
-	rxReduceWS := regexp.MustCompile(`[ \t]+`)
 
 	rawHeaders, rawBody, err := getHeadersBody(email)
+	if err != nil {
+		return nil, nil, err
+	}
 
 	canonicalizations := strings.Split(cano, "/")
 
 	// canonicalyze header
-	headersList, err := getHeadersList(&rawHeaders)
+	headersList, err := getHeadersList(rawHeaders)
 
 	// pour chaque header a conserver on traverse tous les headers dispo
 	// If multi instance of a field we must keep it from the bottom to the top
@@ -369,6 +418,7 @@ func canonicalize(email []byte, cano string, h []string) (headers, body []byte, 
 		match = nil
 		headerToKeepToLower := strings.ToLower(headerToKeep)
 		for e := headersList.Front(); e != nil; e = e.Next() {
+			//fmt.Printf("|%s|\n", e.Value.(string))
 			t := strings.Split(e.Value.(string), ":")
 			if strings.ToLower(t[0]) == headerToKeepToLower {
 				match = e
@@ -428,7 +478,6 @@ func canonicalize(email []byte, cano string, h []string) (headers, body []byte, 
 
 // canonicalizeHeader returns canonicalized version of header
 func canonicalizeHeader(header string, algo string) (string, error) {
-	//rxReduceWS := regexp.MustCompile(`[ \t]+`)
 	if algo == "simple" {
 		// The "simple" header canonicalization algorithm does not change header
 		// fields in any way.  Header fields MUST be presented to the signing or
@@ -486,6 +535,7 @@ func getBodyHash(body []byte, algo string, bodyLength uint) (string, error) {
 	if bodyLength != 0 {
 		if uint(len(toH)) < bodyLength {
 			bodyLength = uint(len(toH))
+			//return "", ErrBadDKimTagLBodyTooShort
 		}
 		toH = toH[0:bodyLength]
 	}
@@ -573,10 +623,10 @@ func validateCanonicalization(cano string) (string, error) {
 }
 
 // getHeadersList returns headers as list
-func getHeadersList(rawHeader *[]byte) (*list.List, error) {
+func getHeadersList(rawHeader []byte) (*list.List, error) {
 	headersList := list.New()
 	currentHeader := []byte{}
-	for _, line := range bytes.SplitAfter(*rawHeader, []byte{10}) {
+	for _, line := range bytes.SplitAfter(rawHeader, []byte{10}) {
 		if line[0] == 32 || line[0] == 9 {
 			if len(currentHeader) == 0 {
 				return headersList, ErrBadMailFormatHeaders
@@ -597,8 +647,15 @@ func getHeadersList(rawHeader *[]byte) (*list.List, error) {
 
 // getHeadersBody return headers and body
 func getHeadersBody(email []byte) ([]byte, []byte, error) {
-	// TODO: \n -> \r\n
-	parts := bytes.SplitN(email, []byte{13, 10, 13, 10}, 2)
+	substitutedEmail := email
+
+	// only replace \n with \r\n when \r\n\r\n not exists
+	if bytes.Index(email, []byte{13, 10, 13, 10}) < 0 {
+		// \n -> \r\n
+		substitutedEmail = bytes.Replace(email, []byte{10}, []byte{13, 10}, -1)
+	}
+
+	parts := bytes.SplitN(substitutedEmail, []byte{13, 10, 13, 10}, 2)
 	if len(parts) != 2 {
 		return []byte{}, []byte{}, ErrBadMailFormat
 	}
