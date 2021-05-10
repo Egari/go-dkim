@@ -2,12 +2,17 @@ package dkim
 
 import (
 	//"fmt"
+	"crypto/rsa"
+	"crypto/x509"
+	"encoding/pem"
+	"fmt"
+	"net"
 	"strings"
 	"testing"
 	"time"
 
-	"fmt"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 const (
@@ -36,6 +41,17 @@ kS5vLkzRI84eiJrm3+IieUqIIicsO+WYxQs+JgVx5XhpPjX4SQjHtwEC2xKkWnEv
 
 	selector = "test"
 )
+
+func privKeyRSA(tb testing.TB) *rsa.PrivateKey {
+	block, rest := pem.Decode([]byte(privKey))
+	require.NotNil(tb, block)
+	require.Empty(tb, rest)
+
+	key, err := x509.ParsePKCS1PrivateKey(block.Bytes)
+	require.NoError(tb, err)
+
+	return key
+}
 
 var emailBase = "Received: (qmail 28277 invoked from network); 1 May 2015 09:43:37 -0000" + CRLF +
 	"Received: (qmail 21323 invoked from network); 1 May 2015 09:48:39 -0000" + CRLF +
@@ -140,6 +156,13 @@ var signedMissingFlag = "DKIM-Signature: v=1; q=dns/txt; c=simple/simple;" + CRL
 	" AKF2TcTLZ++1nalq+djU+/aP4KYQd4RWWFBjkxDzvCH4bvB1M5AGp4Qz9ldmdMQBWOvvSp" + CRLF +
 	" DIpJW4XNA/uqLSswtjCYbJsSg9Ywv1o=" + CRLF + emailBase
 
+var signedBadAFlag = "DKIM-Signature: v=1; a=rsashasha sfds; q=dns/txt; c=simple/simple;" + CRLF +
+	" s=test; d=tmail.io; l=5; h=from:date:mime-version:received:received;" + CRLF +
+	" bh=GF+NsyJx/iX1Yab8k4suJkMG7DBO2lGAB9F2SCY4GWk=;" + CRLF +
+	" b=SoEhlu1Emm2ASqo8jMhz6FIf2nNHt3ouY4Av/pFFEkQ048RqUFP437ap7RbtL2wh0N3Kkm" + CRLF +
+	" AKF2TcTLZ++1nalq+djU+/aP4KYQd4RWWFBjkxDzvCH4bvB1M5AGp4Qz9ldmdMQBWOvvSp" + CRLF +
+	" DIpJW4XNA/uqLSswtjCYbJsSg9Ywv1o=" + CRLF + emailBase
+
 var signedBadAlgo = "DKIM-Signature: v=1; a=rsa-shasha; q=dns/txt; c=simple/simple;" + CRLF +
 	" s=test; d=tmail.io; l=5; h=from:date:mime-version:received:received;" + CRLF +
 	" bh=GF+NsyJx/iX1Yab8k4suJkMG7DBO2lGAB9F2SCY4GWk=;" + CRLF +
@@ -218,175 +241,210 @@ func Test_SignConfig(t *testing.T) {
 	email := []byte(emailBase)
 	emailToTest := append([]byte(nil), email...)
 	options := dkim.NewSigOptions()
-	_, err := dkim.Sign(emailToTest, options)
+	emailToTest, err := dkim.Sign(emailToTest, options)
 	assert.NotNil(t, err)
 	// && err No private key
 	assert.EqualError(t, err, ErrSignPrivateKeyRequired.Error())
 	options.PrivateKey = []byte(privKey)
 	emailToTest = append([]byte(nil), email...)
-	_, err = dkim.Sign(emailToTest, options)
+	emailToTest, err = dkim.Sign(emailToTest, options)
 
 	// Domain
 	assert.EqualError(t, err, ErrSignDomainRequired.Error())
 	options.Domain = "toorop.fr"
 	emailToTest = append([]byte(nil), email...)
-	_, err = dkim.Sign(emailToTest, options)
+	emailToTest, err = dkim.Sign(emailToTest, options)
 
 	// Selector
 	assert.Error(t, err, ErrSignSelectorRequired.Error())
 	options.Selector = "default"
 	emailToTest = append([]byte(nil), email...)
-	_, err = dkim.Sign(emailToTest, options)
+	emailToTest, err = dkim.Sign(emailToTest, options)
 	assert.NoError(t, err)
 
 	// Canonicalization
 	options.Canonicalization = "simple/relaxed/simple"
 	emailToTest = append([]byte(nil), email...)
-	_, err = dkim.Sign(emailToTest, options)
+	emailToTest, err = dkim.Sign(emailToTest, options)
 	assert.EqualError(t, err, ErrSignBadCanonicalization.Error())
 
 	options.Canonicalization = "simple/relax"
 	emailToTest = append([]byte(nil), email...)
-	_, err = dkim.Sign(emailToTest, options)
+	emailToTest, err = dkim.Sign(emailToTest, options)
 	assert.EqualError(t, err, ErrSignBadCanonicalization.Error())
 
 	options.Canonicalization = "relaxed"
 	emailToTest = append([]byte(nil), email...)
-	_, err = dkim.Sign(emailToTest, options)
+	emailToTest, err = dkim.Sign(emailToTest, options)
 	assert.NoError(t, err)
 
 	options.Canonicalization = "SiMple/relAxed"
 	emailToTest = append([]byte(nil), email...)
-	_, err = dkim.Sign(emailToTest, options)
+	emailToTest, err = dkim.Sign(emailToTest, options)
 	assert.NoError(t, err)
 
 	// header
 	options.Headers = []string{"toto"}
 	emailToTest = append([]byte(nil), email...)
-	_, err = dkim.Sign(emailToTest, options)
+	emailToTest, err = dkim.Sign(emailToTest, options)
 	assert.EqualError(t, err, ErrSignHeaderShouldContainsFrom.Error())
 
 	options.Headers = []string{"To", "From"}
 	emailToTest = append([]byte(nil), email...)
-	_, err = dkim.Sign(emailToTest, options)
+	emailToTest, err = dkim.Sign(emailToTest, options)
 	assert.NoError(t, err)
 
 }
 
 func Test_canonicalize(t *testing.T) {
-	dkim := NewDkim()
-
 	email := []byte(emailBase)
 	emailToTest := append([]byte(nil), email...)
+
+	dkim := NewDkim()
 	options := dkim.NewSigOptions()
+
 	options.Headers = []string{"from", "date", "mime-version", "received", "received", "In-Reply-To"}
 	// simple/simple
 	options.Canonicalization = "simple/simple"
 	header, body, err := canonicalize(emailToTest, options.Canonicalization, options.Headers)
 	assert.NoError(t, err)
-	assert.Equal(t, headerSimple, string(header))
-	assert.Equal(t, bodySimple, string(body))
+	assert.Equal(t, []byte(headerSimple), header)
+	assert.Equal(t, []byte(bodySimple), body)
 
 	// relaxed/relaxed
 	emailToTest = append([]byte(nil), email...)
 	options.Canonicalization = "relaxed/relaxed"
 	header, body, err = canonicalize(emailToTest, options.Canonicalization, options.Headers)
 	assert.NoError(t, err)
-	assert.Equal(t, headerRelaxed, string(header))
-	assert.Equal(t, bodyRelaxed, string(body))
+	assert.Equal(t, []byte(headerRelaxed), header)
+	assert.Equal(t, []byte(bodyRelaxed), body)
 
 }
 
 func Test_Sign(t *testing.T) {
-	dkim := NewDkim()
-
 	email := []byte(emailBase)
 	emailRelaxed := append([]byte(nil), email...)
+	dkim := NewDkim()
 	options := dkim.NewSigOptions()
+
 	options.PrivateKey = []byte(privKey)
 	options.Domain = domain
 	options.Selector = selector
 	//options.SignatureExpireIn = 3600
-	options.Headers = []string{"from", "date", "mime-version", "received", "received", "cc"}
+	options.Headers = []string{"from", "date", "mime-version", "received", "received"}
 	options.AddSignatureTimestamp = false
 
 	options.Canonicalization = "relaxed/relaxed"
 	emailRelaxed, err := dkim.Sign(emailRelaxed, options)
 	assert.NoError(t, err)
-	assert.Equal(t, signedRelaxedRelaxed, string(emailRelaxed))
+	assert.Equal(t, []byte(signedRelaxedRelaxed), emailRelaxed)
 
 	options.BodyLength = 5
 	emailRelaxed = append([]byte(nil), email...)
 	emailRelaxed, err = dkim.Sign(emailRelaxed, options)
 	assert.NoError(t, err)
-	assert.Equal(t, signedRelaxedRelaxedLength, string(emailRelaxed))
+	assert.Equal(t, []byte(signedRelaxedRelaxedLength), emailRelaxed)
 
 	options.BodyLength = 0
 	options.Canonicalization = "simple/simple"
 	emailSimple := append([]byte(nil), email...)
 	emailSimple, err = dkim.Sign(emailSimple, options)
-	assert.Equal(t, signedSimpleSimple, string(emailSimple))
+	assert.Equal(t, []byte(signedSimpleSimple), emailSimple)
 
 	options.Headers = []string{"from", "subject", "date", "message-id"}
 	memail := []byte(missingHeaderMail)
-	_, err = dkim.Sign(memail, options)
+	memail, err = dkim.Sign(memail, options)
+	assert.NoError(t, err)
+
+	options.Headers = []string{"from", "subject", "date", "message-id", "non-existent-header"}
+	memail = []byte(missingHeaderMail)
+	memail, err = dkim.Sign(memail, options)
 	assert.NoError(t, err)
 
 	options.BodyLength = 5
 	options.Canonicalization = "simple/simple"
 	emailSimple = append([]byte(nil), email...)
 	emailSimple, err = dkim.Sign(emailSimple, options)
-	assert.Equal(t, signedSimpleSimpleLength, string(emailSimple))
+	assert.Equal(t, []byte(signedSimpleSimpleLength), emailSimple)
 
 	// options.BodyLength is way larger than email body
 	options.BodyLength = 50000
+	options.Canonicalization = "simple/simple"
 	emailRelaxed = append([]byte(nil), email...)
-	emailRelaxed, err = dkim.Sign(emailRelaxed, options)
+	_, err = dkim.Sign(emailSimple, options)
 	assert.NoError(t, err)
 }
 
 func Test_Verify(t *testing.T) {
+	resolveTXT := DNSOptLookupTXT(func(name string) ([]string, error) {
+		switch name {
+		case selector + "._domainkey." + domain:
+			return []string{"v=DKIM1; t=y; p=" + pubKey}, nil
+		// case "TODO._domainkey.gmail.com":
+		// 	return []string{"v=DKIM1; p="}, nil
+		default:
+			return net.LookupTXT(name)
+		}
+	})
+
 	dkim := NewDkim()
 
 	// no DKIM header
 	email := []byte(emailBase)
-	_, err := dkim.Verify(email)
+	status, err := dkim.Verify(email, resolveTXT)
+	assert.Equal(t, NOTSIGNED, status)
 	assert.Equal(t, ErrDkimHeaderNotFound, err)
 
 	// No From
 	email = []byte(signedNoFrom)
-	_, err = dkim.Verify(email)
+	status, err = dkim.Verify(email, resolveTXT)
 	assert.Equal(t, ErrVerifyBodyHash, err)
+	assert.Equal(t, TESTINGPERMFAIL, status) // cause we use dkheader of the "with from" email
 
 	// missing mandatory 'a' flag
 	email = []byte(signedMissingFlag)
-	_, err = dkim.Verify(email)
+	status, err = dkim.Verify(email, resolveTXT)
 	assert.Error(t, err)
+	assert.Equal(t, PERMFAIL, status)
 	assert.Equal(t, ErrDkimHeaderMissingRequiredTag, err)
 
 	// missing bad algo
 	email = []byte(signedBadAlgo)
-	_, err = dkim.Verify(email)
+	status, err = dkim.Verify(email, resolveTXT)
+	assert.Equal(t, PERMFAIL, status)
+	assert.Equal(t, ErrSignBadAlgo, err)
+
+	// bad a flag
+	email = []byte(signedBadAFlag)
+	status, err = dkim.Verify(email, resolveTXT)
+	assert.Equal(t, PERMFAIL, status)
 	assert.Equal(t, ErrSignBadAlgo, err)
 
 	// relaxed
 	email = []byte(signedRelaxedRelaxedLength)
-	_, err = dkim.Verify(email)
-	assert.Equal(t, ErrTesting, err)
+	status, err = dkim.Verify(email, resolveTXT)
+	assert.NoError(t, err)
+	assert.Equal(t, SUCCESS, status)
 
 	// simple
 	email = []byte(signedSimpleSimpleLength)
-	_, err = dkim.Verify(email)
-	assert.Equal(t, ErrTesting, err)
+	status, err = dkim.Verify(email, resolveTXT)
+	assert.NoError(t, err)
+	assert.Equal(t, SUCCESS, status)
 
 	// gmail
-	email = []byte(fromGmail)
-	_, err = dkim.Verify(email)
-	assert.NoError(t, err)
-
+	// TODO:
+	// Google removed this DNS record some time ago. Someone will have to send an email they're
+	// OK with being publicly available, replace the value of the fromGmail var with that, then grab
+	// the DNS record indicated in the DKIM signature and update the resolveTXT function to return
+	// it when asked. Then this should work.
+	// email = []byte(fromGmail)
+	// status, err = Verify(&email, resolveTXT)
+	// assert.NoError(t, err)
+	// assert.Equal(t, SUCCESS, status)
 }
 
-var yahooIncDKIMtest = strings.Replace(`X-Apparently-To: andreser@yahoo-inc.com; Mon, 17 Aug 2015 22:49:25 +0000
+var yahooIncDKIMtest =`X-Apparently-To: andreser@yahoo-inc.com; Mon, 17 Aug 2015 22:49:25 +0000
 Return-Path: <andreser@yahoo-inc.com>
 Received-SPF: pass (domain of yahoo-inc.com designates 216.145.54.109 as permitted sender)
 X-YMailISG: mjZhcf4WLDsyM65yWRfgyfO_lZT.dRW6ZkL0mQ36QKSZ1wt8
@@ -416,16 +474,16 @@ Authentication-Results: mta2007.corp.mail.ne1.yahoo.com  from=yahoo-inc.com; dom
 Received: from 127.0.0.1  (EHLO mrout4.yahoo.com) (216.145.54.109)
   by mta2007.corp.mail.ne1.yahoo.com with SMTPS; Mon, 17 Aug 2015 22:49:25 +0000
 Received: from omp1017.mail.ne1.yahoo.com (omp1017.mail.ne1.yahoo.com [98.138.89.161])
-	by mrout4.yahoo.com (8.14.9/8.14.9/y.out) with ESMTP id t7HMn6pT004450
-	(version=TLSv1/SSLv3 cipher=DHE-RSA-CAMELLIA256-SHA bits=256 verify=NO)
-	for <andreser@yahoo-inc.com>; Mon, 17 Aug 2015 15:49:06 -0700 (PDT)
+       by mrout4.yahoo.com (8.14.9/8.14.9/y.out) with ESMTP id t7HMn6pT004450
+       (version=TLSv1/SSLv3 cipher=DHE-RSA-CAMELLIA256-SHA bits=256 verify=NO)
+       for <andreser@yahoo-inc.com>; Mon, 17 Aug 2015 15:49:06 -0700 (PDT)
 DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/simple; d=yahoo-inc.com;
-	s=cobra; t=1439851746;
-	bh=Zg0pSZvCcMHE9S9qpkoEKeacBIM4T3Xu4TUSMEL4rXw=;
-	h=Date:From:Reply-To:To:Subject;
-	b=C+cq+oEeDf+21aR1gaYIeuqE9cwJBuT3leqtd1ktLtmd4R3HAWXkt8Wr18PeOicjT
-	 +8IJeZ4t+D6UDq3cIHRblyK2+LRP514YDttLfNbQQ28BOlEaycS4ZbrRtwYR0/bJsJ
-	 EekQ8FrwzHZQOlmrqeN4bVIAlI73X+OBynbLyDrw=
+       s=cobra; t=1439851746;
+       bh=Zg0pSZvCcMHE9S9qpkoEKeacBIM4T3Xu4TUSMEL4rXw=;
+       h=Date:From:Reply-To:To:Subject;
+       b=C+cq+oEeDf+21aR1gaYIeuqE9cwJBuT3leqtd1ktLtmd4R3HAWXkt8Wr18PeOicjT
+        +8IJeZ4t+D6UDq3cIHRblyK2+LRP514YDttLfNbQQ28BOlEaycS4ZbrRtwYR0/bJsJ
+        EekQ8FrwzHZQOlmrqeN4bVIAlI73X+OBynbLyDrw=
 Received: (qmail 15334 invoked by uid 1000); 17 Aug 2015 22:49:06 -0000
 DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed; d=yahoo-inc.com; s=ginc1024; t=1439851746; bh=Zg0pSZvCcMHE9S9qpkoEKeacBIM4T3Xu4TUSMEL4rXw=; h=Date:From:Reply-To:To:Message-ID:Subject:MIME-Version:Content-Type; b=Ut+tXUluIOFrGnFm6m0fvXuIQDIEulXFkWmj9bQSO0JN3gPiWfuh1bFhZBdnu2C4SREtTfrxHI8q5DGPjD8yg4LnxFh3HOuaf4Ttm8w72QGO1HxJCdwkNvu5W4mnFTEB8hdl2u5naE4JqjJtM291ZYIJGvxFA2J3+Snj/N2aG40=
 X-YMail-OSG: G1B4VdwVM1lYA9kmxoxrGwEODiHeae6vbYVeBm754R2VWrC5KBM9pyd4ojSurOA
@@ -441,7 +499,7 @@ Message-ID: <408588803.6263873.1439851745104.JavaMail.yahoo@mail.yahoo.com>
 Subject: end-to-end public key verification [test]
 MIME-Version: 1.0
 Content-Type: multipart/alternative; 
-	boundary="----=_Part_6263872_19047179.1439851745102"
+       boundary="----=_Part_6263872_19047179.1439851745102"
 Content-Length: 622
 
 ------=_Part_6263872_19047179.1439851745102
@@ -454,14 +512,22 @@ Content-Type: text/html; charset=UTF-8
 Content-Transfer-Encoding: 7bit
 
 <html><body><div style="color:#000; background-color:#fff; font-family:HelveticaNeue-Light, Helvetica Neue Light, Helvetica Neue, Helvetica, Arial, Lucida Grande, sans-serif;font-size:16px"><div id="yui_3_16_0_1_1439835732243_26145" dir="ltr">fdsfasdfdasgawgasdgdsgadfgadsgdgadga</div></div></body></html>
-------=_Part_6263872_19047179.1439851745102--`, "\n", "\r\n", -1)
+------=_Part_6263872_19047179.1439851745102--`
 
 func TestYahooIncDKIM(t *testing.T) {
+	var err error
 	dkim := NewDkim()
-	dkim.lookupTXT = func(string) ([]string, error) {
+	lookupTXT := DNSOptLookupTXT(func(string) ([]string, error) {
 		return []string{"v=DKIM1; g=*; k=rsa; p=MIGfMA0GCSqGSIb3DQEBAQUAA4GNADCBiQKBgQDGDd1Fz/AblN4d1haW+4B/u8PXkpd/s/JFkCPqp0Zk8xZ/SEs15fsWmj7yZwfsgi04Bs1eJhUIGf0iufHvkK5ws5XKBfbw1hYBHexopqYT5JFERYJ3slNEG5EeB04kKWpECjoMkXhDWvUJrHaBqGAz2KQ1dKAzrtKqRN2IVcDbBQIDAQAB"}, nil
+	})
+
+	_, err = dkim.Verify([]byte(yahooIncDKIMtest), lookupTXT)
+	if err != nil {
+		t.Fatal(err)
 	}
-	_, err := dkim.Verify([]byte(yahooIncDKIMtest))
+
+	yahooIncDKIMtestWithCrlf := strings.Replace(yahooIncDKIMtest, "\n", "\r\n", -1)
+	_, err = dkim.Verify([]byte(yahooIncDKIMtestWithCrlf), lookupTXT)
 	if err != nil {
 		t.Fatal(err)
 	}

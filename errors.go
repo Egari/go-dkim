@@ -6,22 +6,22 @@ import (
 
 var (
 	// ErrSignPrivateKeyRequired when there not private key in config
-	ErrSignPrivateKeyRequired = errors.New("PrivateKey is required")
+	ErrSignPrivateKeyRequired = errors.New("privateKey is required")
 
 	// ErrSignDomainRequired when there is no domain defined in config
-	ErrSignDomainRequired = errors.New("Domain is required")
+	ErrSignDomainRequired = errors.New("domain is required")
 
 	// ErrSignSelectorRequired when there is no Selcteir defined in config
-	ErrSignSelectorRequired = errors.New("Selector is required")
+	ErrSignSelectorRequired = errors.New("selector is required")
 
 	// ErrSignHeaderShouldContainsFrom If Headers is specified it should at least contain 'from'
 	ErrSignHeaderShouldContainsFrom = errors.New("header must contains 'from' field")
 
 	// ErrSignBadCanonicalization If bad Canonicalization parameter
-	ErrSignBadCanonicalization = errors.New("bad Canonicalization parameter")
+	ErrSignBadCanonicalization = errors.New("bad canonicalization parameter")
 
-	// ErrCandNotParsePrivateKey when unable to parse private key
-	ErrCandNotParsePrivateKey = errors.New("can not parse private key, check format (pem) and validity")
+	// ErrCanNotParsePrivateKey when unable to parse private key
+	ErrCanNotParsePrivateKey = errors.New("can not parse private key, check format (pem) and validity")
 
 	// ErrSignBadAlgo Bad algorithm
 	ErrSignBadAlgo = errors.New("bad algorithm. Only rsa-sha1 or rsa-sha256 are permitted")
@@ -31,6 +31,9 @@ var (
 
 	// ErrBadMailFormatHeaders bad headers format (not DKIM Header)
 	ErrBadMailFormatHeaders = errors.New("bad mail format found in headers")
+
+	// ErrBadDKimTagLBodyTooShort bad l tag
+	ErrBadDKimTagLBodyTooShort = errors.New("bad tag l or bodyLength option. Body length < l value")
 
 	// ErrDkimHeaderBadFormat when errors found in DKIM header
 	ErrDkimHeaderBadFormat = errors.New("bad DKIM header format")
@@ -62,8 +65,7 @@ var (
 	// ErrVerifyNoKeyForSignature no key
 	ErrVerifyNoKeyForSignature = errors.New("no key for verify")
 
-	// ErrVerifyKeyUnavailable when service (dns) is anavailable.
-	// This error may be temporary in some cases.
+	// ErrVerifyKeyUnavailable when service (dns) is anavailable
 	ErrVerifyKeyUnavailable = errors.New("key unavailable")
 
 	// ErrVerifyTagVMustBeTheFirst if present the v tag must be the firts in the record
@@ -89,7 +91,4 @@ var (
 
 	// ErrVerifyInappropriateHashAlgo when h tag in pub key doesn't contain hash algo from a tag of DKIM header
 	ErrVerifyInappropriateHashAlgo = errors.New("inappropriate has algorithm")
-
-	// ErrTesting
-	ErrTesting = errors.New("public key has testing flag set")
 )
