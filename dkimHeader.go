@@ -447,7 +447,6 @@ func parseDkHeader(header string) (dkh *DKIMHeader, err error) {
 	}
 
 	return dkh, nil
-
 }
 
 // GetHeaderBase return base header for signers

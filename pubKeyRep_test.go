@@ -11,6 +11,7 @@ func TestPubKeyRep(t *testing.T) {
 
 	type testCase struct {
 		Name         string
+		Selector     string
 		Txt          string
 		Expect       *PubKeyRep
 		VerifyOutput VerifyOutput
@@ -377,6 +378,22 @@ func TestPubKeyRep(t *testing.T) {
 			},
 			VerifyOutput: SUCCESS,
 		},
+
+		// Selector
+		{
+			Name: "all supported hashes",
+			Selector: "QQFtdsGyrQ2lshp9",
+			Txt:  "v=DKIM1; h=sha1:sha256; p=" + pubKey,
+			Expect: &PubKeyRep{
+				Version:     "DKIM1",
+				HashAlgo:    []string{"sha1", "sha256"},
+				KeyType:     "rsa",
+				ServiceType: []string{"all"},
+				PubKey:      privKeyRSA(t).PublicKey,
+				Selector:    "QQFtdsGyrQ2lshp9",
+			},
+			VerifyOutput: SUCCESS,
+		},
 	}
 
 	for _, tc := range testCases {
@@ -384,7 +401,7 @@ func TestPubKeyRep(t *testing.T) {
 		tc := tc
 		t.Run(tc.Name, func(t *testing.T) {
 			dkim := NewDkim()
-			pubKeyRep, vo, err := dkim.NewPubKeyResp(tc.Txt)
+			pubKeyRep, vo, err := dkim.NewPubKeyResp(tc.Txt, tc.Selector)
 			if tc.Err != nil {
 				assert.EqualError(t, err, tc.Err.Error())
 			} else {

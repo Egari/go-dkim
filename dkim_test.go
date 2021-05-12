@@ -391,44 +391,44 @@ func Test_Verify(t *testing.T) {
 
 	// no DKIM header
 	email := []byte(emailBase)
-	status, err := dkim.Verify(email, resolveTXT)
+	status, _, err := dkim.Verify(email, resolveTXT)
 	assert.Equal(t, NOTSIGNED, status)
 	assert.Equal(t, ErrDkimHeaderNotFound, err)
 
 	// No From
 	email = []byte(signedNoFrom)
-	status, err = dkim.Verify(email, resolveTXT)
+	status, _, err = dkim.Verify(email, resolveTXT)
 	assert.Equal(t, ErrVerifyBodyHash, err)
 	assert.Equal(t, TESTINGPERMFAIL, status) // cause we use dkheader of the "with from" email
 
 	// missing mandatory 'a' flag
 	email = []byte(signedMissingFlag)
-	status, err = dkim.Verify(email, resolveTXT)
+	status, _, err = dkim.Verify(email, resolveTXT)
 	assert.Error(t, err)
 	assert.Equal(t, PERMFAIL, status)
 	assert.Equal(t, ErrDkimHeaderMissingRequiredTag, err)
 
 	// missing bad algo
 	email = []byte(signedBadAlgo)
-	status, err = dkim.Verify(email, resolveTXT)
+	status, _, err = dkim.Verify(email, resolveTXT)
 	assert.Equal(t, PERMFAIL, status)
 	assert.Equal(t, ErrSignBadAlgo, err)
 
 	// bad a flag
 	email = []byte(signedBadAFlag)
-	status, err = dkim.Verify(email, resolveTXT)
+	status, _, err = dkim.Verify(email, resolveTXT)
 	assert.Equal(t, PERMFAIL, status)
 	assert.Equal(t, ErrSignBadAlgo, err)
 
 	// relaxed
 	email = []byte(signedRelaxedRelaxedLength)
-	status, err = dkim.Verify(email, resolveTXT)
+	status, _, err = dkim.Verify(email, resolveTXT)
 	assert.NoError(t, err)
 	assert.Equal(t, SUCCESS, status)
 
 	// simple
 	email = []byte(signedSimpleSimpleLength)
-	status, err = dkim.Verify(email, resolveTXT)
+	status, _, err = dkim.Verify(email, resolveTXT)
 	assert.NoError(t, err)
 	assert.Equal(t, SUCCESS, status)
 
@@ -521,13 +521,13 @@ func TestYahooIncDKIM(t *testing.T) {
 		return []string{"v=DKIM1; g=*; k=rsa; p=MIGfMA0GCSqGSIb3DQEBAQUAA4GNADCBiQKBgQDGDd1Fz/AblN4d1haW+4B/u8PXkpd/s/JFkCPqp0Zk8xZ/SEs15fsWmj7yZwfsgi04Bs1eJhUIGf0iufHvkK5ws5XKBfbw1hYBHexopqYT5JFERYJ3slNEG5EeB04kKWpECjoMkXhDWvUJrHaBqGAz2KQ1dKAzrtKqRN2IVcDbBQIDAQAB"}, nil
 	})
 
-	_, err = dkim.Verify([]byte(yahooIncDKIMtest), lookupTXT)
+	_, _, err = dkim.Verify([]byte(yahooIncDKIMtest), lookupTXT)
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	yahooIncDKIMtestWithCrlf := strings.Replace(yahooIncDKIMtest, "\n", "\r\n", -1)
-	_, err = dkim.Verify([]byte(yahooIncDKIMtestWithCrlf), lookupTXT)
+	_, _, err = dkim.Verify([]byte(yahooIncDKIMtestWithCrlf), lookupTXT)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -20,6 +20,7 @@ type PubKeyRep struct {
 	ServiceType  []string
 	FlagTesting  bool // flag y
 	FlagIMustBeD bool // flag i
+	Selector     string
 }
 
 // DNSOptions holds settings for looking up DNS records
@@ -81,17 +82,18 @@ func (dkim *dkim) NewPubKeyRespFromDNS(selector, domain string, opts ...DNSOpt) 
 	// parsing, we keep the first record
 	// TODO: if there is multiple record
 
-	return dkim.NewPubKeyResp(txt[0])
+	return dkim.NewPubKeyResp(txt[0], selector)
 }
 
 // NewPubKeyResp parses DKIM record (usually from DNS)
-func (dkim *dkim) NewPubKeyResp(dkimRecord string) (*PubKeyRep, VerifyOutput, error) {
+func (dkim *dkim) NewPubKeyResp(dkimRecord string, selector string) (*PubKeyRep, VerifyOutput, error) {
 	pkr := new(PubKeyRep)
 	pkr.Version = "DKIM1"
 	pkr.HashAlgo = []string{"sha1", "sha256"}
 	pkr.KeyType = "rsa"
 	pkr.FlagTesting = false
 	pkr.FlagIMustBeD = false
+	pkr.Selector = selector
 
 	p := strings.Split(dkimRecord, ";")
 	for i, data := range p {
